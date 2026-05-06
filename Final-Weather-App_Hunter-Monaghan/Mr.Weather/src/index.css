@@ -101,16 +101,27 @@ body {
   margin-bottom: 20px;
 }
 
+.search-wrap {
+  position: relative;
+  width: 100%;
+}
+
 .search-row {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.search-input-wrap {
+  position: relative;
+  flex: 1 1 180px;
+  min-width: 0;
 }
 
 .search-input {
-  flex: 1 1 180px;
-  min-width: 0;
-  padding: 14px 16px;
+  width: 100%;
+  padding: 14px 36px 14px 16px;
   font-size: 1rem;
   font-family: inherit;
   color: #0f172a;
@@ -138,6 +149,84 @@ body {
 .search-input:disabled {
   opacity: 0.7;
   cursor: not-allowed;
+}
+
+.geo-hint {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.1rem;
+  color: #64748b;
+  pointer-events: none;
+  animation: pulse-dots 1s ease-in-out infinite;
+}
+
+@keyframes pulse-dots {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.suggest-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  max-height: min(320px, 50vh);
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22);
+}
+
+.suggest-item {
+  display: block;
+  width: 100%;
+  padding: 12px 12px;
+  margin: 0;
+  text-align: left;
+  font-family: inherit;
+  font-size: 0.92rem;
+  color: #0f172a;
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.suggest-item:hover,
+.suggest-item:focus-visible {
+  outline: none;
+  background: rgba(56, 189, 248, 0.18);
+}
+
+.suggest-item.is-active {
+  background: rgba(56, 189, 248, 0.28);
+}
+
+.suggest-name {
+  display: block;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.suggest-meta {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #64748b;
 }
 
 .search-btn {
@@ -443,7 +532,8 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .spinner,
   .skeleton-line,
-  .skeleton-block {
+  .skeleton-block,
+  .geo-hint {
     animation: none;
   }
 
