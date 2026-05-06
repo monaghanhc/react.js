@@ -1,7 +1,7 @@
 // Weather App — Mr. Weather
 // Author: Hunter Monaghan
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 
 const api = {
   key: process.env.REACT_APP_WEATHER_API_KEY,
@@ -9,6 +9,7 @@ const api = {
 };
 
 const GEO_BASE = 'https://api.openweathermap.org/geo/1.0/direct';
+const FAV_KEY = 'mr-weather-favorites-v1';
 
 function formatPlace(s) {
   const parts = [s.name];
@@ -17,19 +18,84 @@ function formatPlace(s) {
   return parts.join(', ');
 }
 
-function App() {
+function favId(lat, lon) {
+  return `${Number(lat).toFixed(4)},${Number(lon).toFixed(4)}`;
+}
+
+function degToCompass(deg) {
+  if (deg == null || Number.isNaN(deg)) return '—';
+  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  return dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+}
+
+function moodLine(main, tempC) {
+  const m = (main || '').toLowerCase();
+  if (m.includes('clear')) return tempC > 24 ? 'Bright and warm — perfect sky.' : 'Crystal clear skies overhead.';
+  if (m.includes('cloud')) return 'Soft light through the clouds.';
+  if (m.includes('rain') || m.includes('drizzle')) return 'Rain in the air — stay cozy.';
+  if (m.includes('snow')) return 'Winter wonderland energy.';
+  if (m.includes('thunder')) return 'Electric skies — dramatic weather.';
+  if (m.includes('mist') || m.includes('fog')) return 'Soft mist — visibility may vary.';
+  if (m.includes('wind')) return 'The wind has something to say.';
+  return 'Live conditions from OpenWeather.';
+}
+
+function formatCityClock(timezoneSec) {
+  const d = new Date();
+  const utc = d.getTime() + d.getTimezoneOffset() * 60000;
+  return new Date(utc + timezoneSec * 1000);
+}
+
+function formatSunUnix(utcUnixSec, timezoneSec) {
+  return new Date((utcUnixSec + timezoneSec) * 1000);
+}
+
+export default function App() {
   const [query, setQuery] = useState('');
   const [weather, setWeather] = useState({});
+  const [forecast, setForecast] = useState(null);
   const [apiError, setApiError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [forecastLoading, setForecastLoading] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
   const [highlight, setHighlight] = useState(-1);
   const [geoLoading, setGeoLoading] = useState(false);
+  const [favorites, setFavorites] = useState([]);
+  const [cityClock, setCityClock] = useState(null);
 
   const wrapRef = useRef(null);
   const listRef = useRef(null);
 
   const hasWeather = typeof weather.main !== 'undefined';
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(FAV_KEY);
+      if (raw) setFavorites(JSON.parse(raw));
+    } catch (_) {
+      /* ignore */
+    }
+  }, []);
+
+  const saveFavorites = useCallback((next) => {
+    try {
+      localStorage.setItem(FAV_KEY, JSON.stringify(next));
+    } catch (_) {
+      /* ignore */
+    }
+  }, []);
+
+  /* Live clock for selected city */
+  useEffect(() => {
+    if (!hasWeather || typeof weather.timezone !== 'number') {
+      setCityClock(null);
+      return;
+    }
+    const tick = () => setCityClock(formatCityClock(weather.timezone));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [hasWeather, weather.timezone]);
 
   const closeSuggestions = useCallback(() => {
     setSuggestions([]);
@@ -39,6 +105,7 @@ function App() {
   const applyWeatherPayload = useCallback((data, res) => {
     if (!res.ok || data.cod === 401 || data.cod === '401') {
       setWeather({});
+      setForecast(null);
       setApiError(
         data.message || `Weather API error (${res.status}). Check your OpenWeather API key.`
       );
@@ -46,12 +113,28 @@ function App() {
     }
     if (data.cod && String(data.cod) !== '200') {
       setWeather({});
+      setForecast(null);
       setApiError(data.message || 'Could not find weather for that search.');
       return false;
     }
     setWeather(data);
     setQuery('');
     return true;
+  }, []);
+
+  const fetchForecast = useCallback((lat, lon) => {
+    setForecastLoading(true);
+    setForecast(null);
+    fetch(
+      `${api.base}forecast?lat=${lat}&lon=${lon}&units=metric&cnt=24&APPID=${api.key}`
+    )
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.cod === '200' || data.list) setForecast(data);
+        else setForecast(null);
+      })
+      .catch(() => setForecast(null))
+      .finally(() => setForecastLoading(false));
   }, []);
 
   const fetchWeather = useCallback(
@@ -65,6 +148,7 @@ function App() {
 
       setApiError(null);
       setWeather({});
+      setForecast(null);
       setLoading(true);
       closeSuggestions();
 
@@ -76,7 +160,10 @@ function App() {
       fetch(url)
         .then(async (res) => {
           const data = await res.json();
-          applyWeatherPayload(data, res);
+          const ok = applyWeatherPayload(data, res);
+          if (ok && data.coord) {
+            fetchForecast(data.coord.lat, data.coord.lon);
+          }
         })
         .catch(() => {
           setApiError('Network error. Check your connection and try again.');
@@ -85,8 +172,13 @@ function App() {
           setLoading(false);
         });
     },
-    [applyWeatherPayload, closeSuggestions]
+    [applyWeatherPayload, closeSuggestions, fetchForecast]
   );
+
+  const refreshWeather = useCallback(() => {
+    if (!hasWeather || !weather.coord) return;
+    fetchWeather({ lat: weather.coord.lat, lon: weather.coord.lon });
+  }, [hasWeather, weather.coord, fetchWeather]);
 
   const pickSuggestion = useCallback(
     (s) => {
@@ -114,7 +206,37 @@ function App() {
     fetchWeather({ q: trimmed });
   };
 
-  /* Debounced geocoding autocomplete */
+  const toggleFavorite = useCallback(() => {
+    if (!hasWeather || !weather.coord) return;
+    const lat = weather.coord.lat;
+    const lon = weather.coord.lon;
+    const id = favId(lat, lon);
+    const entry = {
+      id,
+      name: weather.name,
+      country: weather.sys && weather.sys.country,
+      lat,
+      lon,
+    };
+    setFavorites((prev) => {
+      const exists = prev.some((f) => f.id === id);
+      const next = exists ? prev.filter((f) => f.id !== id) : [...prev, entry];
+      saveFavorites(next);
+      return next;
+    });
+  }, [hasWeather, weather, saveFavorites]);
+
+  const removeFavorite = useCallback(
+    (id) => {
+      setFavorites((prev) => {
+        const next = prev.filter((f) => f.id !== id);
+        saveFavorites(next);
+        return next;
+      });
+    },
+    [saveFavorites]
+  );
+
   useEffect(() => {
     if (!api.key) {
       setSuggestions([]);
@@ -159,7 +281,6 @@ function App() {
     };
   }, [query]);
 
-  /* Click outside closes suggestions */
   useEffect(() => {
     function onDocMouseDown(e) {
       if (wrapRef.current && !wrapRef.current.contains(e.target)) {
@@ -170,7 +291,6 @@ function App() {
     return () => document.removeEventListener('mousedown', onDocMouseDown);
   }, [closeSuggestions]);
 
-  /* Keep highlighted item in view */
   useEffect(() => {
     if (highlight < 0 || !listRef.current) return;
     const node = listRef.current.children[highlight];
@@ -228,8 +348,13 @@ function App() {
       ? `https://openweathermap.org/img/wn/${weather.weather[0].icon}@4x.png`
       : null;
 
-  const conditionLabel =
+  const conditionMain =
     hasWeather && weather.weather && weather.weather[0] ? weather.weather[0].main : '';
+
+  const conditionDesc =
+    hasWeather && weather.weather && weather.weather[0]
+      ? weather.weather[0].description.replace(/\b\w/g, (c) => c.toUpperCase())
+      : '';
 
   const feelsLike =
     hasWeather && weather.main && typeof weather.main.feels_like === 'number'
@@ -246,20 +371,129 @@ function App() {
       ? weather.wind.speed
       : null;
 
+  const windDeg = hasWeather && weather.wind ? weather.wind.deg : null;
+
+  const pressure =
+    hasWeather && weather.main && typeof weather.main.pressure === 'number'
+      ? weather.main.pressure
+      : null;
+
+  const visibilityM =
+    hasWeather && typeof weather.visibility === 'number' ? weather.visibility : null;
+
+  const cloudsPct =
+    hasWeather && weather.clouds && typeof weather.clouds.all === 'number'
+      ? weather.clouds.all
+      : null;
+
   const isWarm = hasWeather && weather.main.temp > 16;
+
+  const conditionSlug = useMemo(() => {
+    const m = (conditionMain || 'default').toLowerCase().replace(/\s+/g, '-');
+    if (m.includes('clear')) return 'clear';
+    if (m.includes('cloud')) return 'clouds';
+    if (m.includes('rain') || m.includes('drizzle')) return 'rain';
+    if (m.includes('snow')) return 'snow';
+    if (m.includes('thunder')) return 'storm';
+    if (m.includes('mist') || m.includes('fog')) return 'mist';
+    return 'default';
+  }, [conditionMain]);
 
   const showSuggestList = suggestions.length > 0 && query.trim().length >= 2;
 
+  const isFav =
+    hasWeather &&
+    weather.coord &&
+    favorites.some((f) => f.id === favId(weather.coord.lat, weather.coord.lon));
+
+  const sunrise =
+    hasWeather && weather.sys && weather.sys.sunrise && typeof weather.timezone === 'number'
+      ? formatSunUnix(weather.sys.sunrise, weather.timezone)
+      : null;
+
+  const sunset =
+    hasWeather && weather.sys && weather.sys.sunset && typeof weather.timezone === 'number'
+      ? formatSunUnix(weather.sys.sunset, weather.timezone)
+      : null;
+
+  const forecastSlots = useMemo(() => {
+    if (!forecast || !forecast.list || !forecast.list.length) return [];
+    return forecast.list.slice(0, 8);
+  }, [forecast]);
+
+  const timeFmt = useMemo(
+    () =>
+      new Intl.DateTimeFormat(undefined, {
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+      }),
+    []
+  );
+
+  const sunFmt = useMemo(
+    () =>
+      new Intl.DateTimeFormat(undefined, {
+        hour: 'numeric',
+        minute: '2-digit',
+      }),
+    []
+  );
+
+  const forecastTimeFmt = useMemo(
+    () =>
+      new Intl.DateTimeFormat(undefined, {
+        weekday: 'short',
+        hour: 'numeric',
+        minute: '2-digit',
+      }),
+    []
+  );
+
   return (
-    <div className={`app${isWarm ? ' warm' : ''}`}>
+    <div
+      className={`app${isWarm ? ' warm' : ''} theme-${conditionSlug}`}
+      data-condition={conditionSlug}
+    >
+      <div className="app-atmosphere" aria-hidden />
+
       <main className="shell">
         <header className="brand">
-          <p className="brand-kicker">Current conditions</p>
+          <p className="brand-kicker">Immersive forecast</p>
           <h1 className="brand-title">Mr. Weather</h1>
           <p className="brand-sub">
-            Search a city—suggestions appear as you type. Pick one or press Search.
+            Search with live suggestions, explore details, scroll the 24h outlook, and save favorite
+            cities.
           </p>
         </header>
+
+        {favorites.length > 0 && (
+          <section className="favorites-bar" aria-label="Saved places">
+            <span className="favorites-label">Saved</span>
+            <div className="favorites-chips">
+              {favorites.map((f) => (
+                <div key={f.id} className="fav-chip-wrap">
+                  <button
+                    type="button"
+                    className="fav-chip"
+                    onClick={() => fetchWeather({ lat: f.lat, lon: f.lon })}
+                  >
+                    {f.name}
+                    <span className="fav-chip-cc">{f.country}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="fav-remove"
+                    onClick={() => removeFavorite(f.id)}
+                    aria-label={`Remove ${f.name} from saved`}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         <form className="search-form" onSubmit={runSearch} noValidate>
           <label htmlFor="city-search" className="sr-only">
@@ -367,64 +601,175 @@ function App() {
             </div>
             <h2 className="empty-title">Your forecast starts here</h2>
             <p className="empty-copy">
-              Type at least two letters to see city suggestions, click one—or enter any city and
-              press Search.
+              Type at least two letters for suggestions, or press Search. Save places you love and
+              watch the 24-hour outlook scroll by.
             </p>
           </section>
         )}
 
         {!loading && hasWeather && (
-          <article className="weather-card">
-            <div className="weather-card-head">
-              <div className="weather-meta">
-                <h2 className="place">
-                  {weather.name}
-                  <span className="country">{weather.sys && weather.sys.country}</span>
-                </h2>
-                <p className="date-line">{dateBuilder(new Date())}</p>
+          <>
+            <article className="weather-card fade-in">
+              <div className="weather-card-toolbar">
+                <button type="button" className="toolbar-btn" onClick={refreshWeather}>
+                  ⟳ Refresh
+                </button>
+                <button
+                  type="button"
+                  className={`toolbar-btn heart${isFav ? ' is-on' : ''}`}
+                  onClick={toggleFavorite}
+                  aria-pressed={isFav}
+                >
+                  {isFav ? '★ Saved' : '☆ Save place'}
+                </button>
               </div>
-              {iconUrl && (
-                <img
-                  className="weather-icon"
-                  src={iconUrl}
-                  alt=""
-                  width={120}
-                  height={120}
-                />
-              )}
-            </div>
 
-            <div className="temp-row">
-              <span className="temp-value">{Math.round(weather.main.temp)}</span>
-              <span className="temp-unit">°C</span>
-            </div>
-            <p className="condition">{conditionLabel}</p>
+              <div className="weather-card-head">
+                <div className="weather-meta">
+                  <h2 className="place">
+                    {weather.name}
+                    <span className="country">{weather.sys && weather.sys.country}</span>
+                  </h2>
+                  <p className="date-line">{dateBuilder(new Date())}</p>
+                  {cityClock && (
+                    <p className="local-clock">
+                      <span className="local-clock-label">There now</span>
+                      {timeFmt.format(cityClock)}
+                    </p>
+                  )}
+                </div>
+                {iconUrl && (
+                  <img
+                    className="weather-icon"
+                    src={iconUrl}
+                    alt=""
+                    width={120}
+                    height={120}
+                  />
+                )}
+              </div>
 
-            <ul className="stats">
-              {feelsLike !== null && (
-                <li className="stat">
-                  <span className="stat-label">Feels like</span>
-                  <span className="stat-value">{feelsLike}°</span>
-                </li>
+              <p className="mood-line">{moodLine(conditionMain, weather.main.temp)}</p>
+
+              <div className="temp-row">
+                <span className="temp-value">{Math.round(weather.main.temp)}</span>
+                <span className="temp-unit">°C</span>
+              </div>
+              <p className="condition">{conditionMain}</p>
+              {conditionDesc && <p className="condition-desc">{conditionDesc}</p>}
+
+              {(sunrise || sunset) && (
+                <div className="sun-row">
+                  {sunrise && (
+                    <div className="sun-pill">
+                      <span className="sun-emoji" aria-hidden>
+                        ☀
+                      </span>
+                      <span className="sun-label">Sunrise</span>
+                      <span className="sun-time">{sunFmt.format(sunrise)}</span>
+                    </div>
+                  )}
+                  {sunset && (
+                    <div className="sun-pill">
+                      <span className="sun-emoji" aria-hidden>
+                        ☽
+                      </span>
+                      <span className="sun-label">Sunset</span>
+                      <span className="sun-time">{sunFmt.format(sunset)}</span>
+                    </div>
+                  )}
+                </div>
               )}
-              {humidity !== null && (
-                <li className="stat">
-                  <span className="stat-label">Humidity</span>
-                  <span className="stat-value">{humidity}%</span>
-                </li>
+
+              <ul className="stats stats-wide">
+                {feelsLike !== null && (
+                  <li className="stat">
+                    <span className="stat-label">Feels like</span>
+                    <span className="stat-value">{feelsLike}°</span>
+                  </li>
+                )}
+                {humidity !== null && (
+                  <li className="stat">
+                    <span className="stat-label">Humidity</span>
+                    <span className="stat-value">{humidity}%</span>
+                  </li>
+                )}
+                {windMs !== null && (
+                  <li className="stat">
+                    <span className="stat-label">Wind</span>
+                    <span className="stat-value">
+                      {windMs.toFixed(1)} m/s
+                      {windDeg != null && (
+                        <span className="wind-compass"> {degToCompass(windDeg)}</span>
+                      )}
+                    </span>
+                  </li>
+                )}
+                {pressure !== null && (
+                  <li className="stat">
+                    <span className="stat-label">Pressure</span>
+                    <span className="stat-value">{pressure} hPa</span>
+                  </li>
+                )}
+                {visibilityM !== null && (
+                  <li className="stat">
+                    <span className="stat-label">Visibility</span>
+                    <span className="stat-value">
+                      {visibilityM >= 1000
+                        ? `${(visibilityM / 1000).toFixed(1)} km`
+                        : `${visibilityM} m`}
+                    </span>
+                  </li>
+                )}
+                {cloudsPct !== null && (
+                  <li className="stat">
+                    <span className="stat-label">Clouds</span>
+                    <span className="stat-value">{cloudsPct}%</span>
+                  </li>
+                )}
+              </ul>
+            </article>
+
+            <section className="forecast-section fade-in" aria-label="24 hour outlook">
+              <div className="forecast-head">
+                <h3 className="forecast-title">Next 24 hours</h3>
+                <span className="forecast-sub">3-hour steps · scroll sideways</span>
+              </div>
+              {forecastLoading && (
+                <div className="forecast-skeleton" aria-live="polite">
+                  <div className="fc-sk-inner" />
+                </div>
               )}
-              {windMs !== null && (
-                <li className="stat">
-                  <span className="stat-label">Wind</span>
-                  <span className="stat-value">{windMs.toFixed(1)} m/s</span>
-                </li>
+              {!forecastLoading && forecastSlots.length > 0 && (
+                <div className="forecast-scroll">
+                  {forecastSlots.map((slot) => {
+                    const ic =
+                      slot.weather && slot.weather[0]
+                        ? `https://openweathermap.org/img/wn/${slot.weather[0].icon}@2x.png`
+                        : null;
+                    const t = slot.dt * 1000;
+                    return (
+                      <div key={slot.dt} className="forecast-slot">
+                        <time className="fc-time" dateTime={new Date(t).toISOString()}>
+                          {forecastTimeFmt.format(new Date(t))}
+                        </time>
+                        {ic && <img className="fc-icon" src={ic} alt="" width={48} height={48} />}
+                        <span className="fc-temp">{Math.round(slot.main.temp)}°</span>
+                        <span className="fc-main">
+                          {slot.weather && slot.weather[0] ? slot.weather[0].main : ''}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
-            </ul>
-          </article>
+              {!forecastLoading && (!forecast || !forecastSlots.length) && (
+                <p className="forecast-unavailable">Forecast unavailable — try refresh.</p>
+              )}
+            </section>
+          </>
         )}
       </main>
     </div>
   );
 }
-
-export default App;
