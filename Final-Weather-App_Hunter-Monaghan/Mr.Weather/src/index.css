@@ -52,6 +52,17 @@ main{
   background-color: rgba(255,255,255,0.5);
 
 }
+.api-error{
+  max-width: 520px;
+  margin: -55px auto 24px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: rgba(180, 40, 40, 0.85);
+  color: #fff;
+  font-size: 15px;
+  line-height: 1.4;
+  text-align: center;
+}
 #header{
   text-align:center;
   margin: 0 auto;

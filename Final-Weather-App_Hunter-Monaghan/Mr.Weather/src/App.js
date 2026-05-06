@@ -18,16 +18,36 @@ function App() {
 
 const [query, setQuery] = useState('')
 const [weather, setWeather] = useState({});
+const [apiError, setApiError] = useState(null);
 
 const search = evt => {
-  if(evt.key === "Enter"){
-    fetch(`${api.base}weather?q=${query}&units=metric&APPID=${api.key}`)
-      .then(res => res.json())
-      .then(result => {
-        setWeather(result);
-        setQuery('');
-      });
+  if (evt.key !== "Enter") return;
+  setApiError(null);
+  if (!api.key) {
+    setApiError("Missing REACT_APP_WEATHER_API_KEY. Add it to .env locally or GitHub Actions secrets, then rebuild.");
+    return;
   }
+  const q = encodeURIComponent(query.trim());
+  if (!q) return;
+  fetch(`${api.base}weather?q=${q}&units=metric&APPID=${api.key}`)
+    .then(async (res) => {
+      const data = await res.json();
+      if (!res.ok || data.cod === 401 || data.cod === "401") {
+        setWeather({});
+        setApiError(data.message || `Weather API error (${res.status}). Check your API key on OpenWeather.`);
+        return;
+      }
+      if (data.cod && String(data.cod) !== "200") {
+        setWeather({});
+        setApiError(data.message || "Could not load weather for that search.");
+        return;
+      }
+      setWeather(data);
+      setQuery('');
+    })
+    .catch(() => {
+      setApiError("Network error. Try again.");
+    });
 }
 
 
@@ -60,9 +80,12 @@ const dateBuilder = (d) => {
             placeholder="search..."
             onChange={e => setQuery(e.target.value)}
             value={query}
-            onKeyPress={search}
+            onKeyDown={search}
             /> 
         </div>
+        {apiError && (
+          <div className="api-error" role="alert">{apiError}</div>
+        )}
 
         {/* <h1 id="header">
         The Daily Forcast
