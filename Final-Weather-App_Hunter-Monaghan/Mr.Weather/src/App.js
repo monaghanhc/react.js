@@ -22,6 +22,31 @@ function favId(lat, lon) {
   return `${Number(lat).toFixed(4)},${Number(lon).toFixed(4)}`;
 }
 
+function seededUnit(index, seed) {
+  const x = Math.sin(index * 12.9898 + seed * 78.233) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+function makeFxItems(count, seed) {
+  return Array.from({ length: count }, (_, i) => {
+    const n = i + 1;
+    const left = seededUnit(n, seed);
+    const top = seededUnit(n, seed + 1);
+    const delay = seededUnit(n, seed + 2);
+    const duration = seededUnit(n, seed + 3);
+    const size = seededUnit(n, seed + 4);
+
+    return {
+      left: `${(left * 100).toFixed(2)}%`,
+      top: `${(top * 100).toFixed(2)}%`,
+      delay: `${(-delay * 8).toFixed(2)}s`,
+      duration: `${(0.7 + duration * 2.8).toFixed(2)}s`,
+      size: `${(4 + size * 12).toFixed(1)}px`,
+      opacity: (0.42 + top * 0.5).toFixed(2),
+    };
+  });
+}
+
 function degToCompass(deg) {
   if (deg == null || Number.isNaN(deg)) return '—';
   const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
@@ -62,11 +87,22 @@ export default function App() {
   const [geoLoading, setGeoLoading] = useState(false);
   const [favorites, setFavorites] = useState([]);
   const [cityClock, setCityClock] = useState(null);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [thunderActive, setThunderActive] = useState(false);
+  const [stormFlash, setStormFlash] = useState(0);
 
   const wrapRef = useRef(null);
   const listRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const soundEnabledRef = useRef(soundEnabled);
+  const thunderTimerRef = useRef(null);
+  const thunderResetRef = useRef(null);
 
   const hasWeather = typeof weather.main !== 'undefined';
+  const rainDrops = useMemo(() => makeFxItems(64, 4), []);
+  const screenDrops = useMemo(() => makeFxItems(18, 12), []);
+  const snowFlakes = useMemo(() => makeFxItems(58, 20), []);
+  const snowSplats = useMemo(() => makeFxItems(15, 28), []);
 
   useEffect(() => {
     try {
@@ -83,6 +119,90 @@ export default function App() {
     } catch (_) {
       /* ignore */
     }
+  }, []);
+
+  const primeAudio = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const AudioCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtor) return;
+
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new AudioCtor();
+    }
+
+    if (audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume().catch(() => {});
+    }
+  }, []);
+
+  const playThunder = useCallback(() => {
+    if (!soundEnabledRef.current) return;
+    const ctx = audioCtxRef.current;
+    if (!ctx || ctx.state !== 'running') return;
+
+    const duration = 1.65;
+    const sampleRate = ctx.sampleRate;
+    const frameCount = Math.floor(sampleRate * duration);
+    const buffer = ctx.createBuffer(1, frameCount, sampleRate);
+    const data = buffer.getChannelData(0);
+    let rolling = 0;
+
+    for (let i = 0; i < frameCount; i += 1) {
+      const fade = 1 - i / frameCount;
+      rolling = rolling * 0.82 + (Math.random() * 2 - 1) * 0.18;
+      data[i] = rolling * Math.pow(fade, 2.35);
+    }
+
+    const source = ctx.createBufferSource();
+    const filter = ctx.createBiquadFilter();
+    const gain = ctx.createGain();
+    const now = ctx.currentTime;
+
+    source.buffer = buffer;
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(90, now);
+    filter.frequency.exponentialRampToValueAtTime(260, now + 0.22);
+    filter.frequency.exponentialRampToValueAtTime(65, now + duration);
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.34, now + 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    source.start(now);
+    source.stop(now + duration);
+  }, []);
+
+  const triggerThunder = useCallback(() => {
+    setStormFlash((tick) => tick + 1);
+    setThunderActive(true);
+
+    if (typeof window !== 'undefined') {
+      if (thunderResetRef.current) {
+        window.clearTimeout(thunderResetRef.current);
+      }
+      thunderResetRef.current = window.setTimeout(() => setThunderActive(false), 850);
+
+      if (window.navigator && typeof window.navigator.vibrate === 'function') {
+        window.navigator.vibrate([70, 35, 160]);
+      }
+    }
+
+    playThunder();
+  }, [playThunder]);
+
+  useEffect(() => {
+    soundEnabledRef.current = soundEnabled;
+  }, [soundEnabled]);
+
+  useEffect(() => {
+    return () => {
+      if (audioCtxRef.current && typeof audioCtxRef.current.close === 'function') {
+        audioCtxRef.current.close().catch(() => {});
+      }
+    };
   }, []);
 
   /* Live clock for selected city */
@@ -176,21 +296,24 @@ export default function App() {
   );
 
   const refreshWeather = useCallback(() => {
+    primeAudio();
     if (!hasWeather || !weather.coord) return;
     fetchWeather({ lat: weather.coord.lat, lon: weather.coord.lon });
-  }, [hasWeather, weather.coord, fetchWeather]);
+  }, [hasWeather, weather.coord, fetchWeather, primeAudio]);
 
   const pickSuggestion = useCallback(
     (s) => {
+      primeAudio();
       setQuery(formatPlace(s));
       closeSuggestions();
       fetchWeather({ lat: s.lat, lon: s.lon });
     },
-    [fetchWeather, closeSuggestions]
+    [fetchWeather, closeSuggestions, primeAudio]
   );
 
   const runSearch = (e) => {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    primeAudio();
     if (highlight >= 0 && suggestions[highlight]) {
       pickSuggestion(suggestions[highlight]);
       return;
@@ -399,6 +522,45 @@ export default function App() {
     return 'default';
   }, [conditionMain]);
 
+  const isStorm = conditionSlug === 'storm';
+  const isRainy = conditionSlug === 'rain' || isStorm;
+  const isSnowy = conditionSlug === 'snow';
+  const hasScreenWeather = isRainy || isSnowy || isStorm;
+
+  useEffect(() => {
+    if (!hasWeather || !isStorm) return;
+
+    let cancelled = false;
+    const scheduleThunder = (delay) => {
+      thunderTimerRef.current = window.setTimeout(() => {
+        if (cancelled) return;
+        triggerThunder();
+        scheduleThunder(4200 + Math.random() * 5200);
+      }, delay);
+    };
+
+    scheduleThunder(850);
+
+    return () => {
+      cancelled = true;
+      if (thunderTimerRef.current) {
+        window.clearTimeout(thunderTimerRef.current);
+      }
+      if (thunderResetRef.current) {
+        window.clearTimeout(thunderResetRef.current);
+      }
+      if (window.navigator && typeof window.navigator.vibrate === 'function') {
+        window.navigator.vibrate(0);
+      }
+    };
+  }, [hasWeather, isStorm, triggerThunder]);
+
+  useEffect(() => {
+    if (!isStorm && thunderActive) {
+      setThunderActive(false);
+    }
+  }, [isStorm, thunderActive]);
+
   const showSuggestList = suggestions.length > 0 && query.trim().length >= 2;
 
   const isFav =
@@ -452,10 +614,114 @@ export default function App() {
 
   return (
     <div
-      className={`app${isWarm ? ' warm' : ''} theme-${conditionSlug}`}
+      className={`app${isWarm ? ' warm' : ''} theme-${conditionSlug}${
+        thunderActive ? ' is-thundering' : ''
+      }`}
       data-condition={conditionSlug}
+      onMouseDown={primeAudio}
+      onTouchStart={primeAudio}
     >
       <div className="app-atmosphere" aria-hidden />
+
+      {hasWeather && (
+        <div className={`weather-effects fx-${conditionSlug}`} aria-hidden="true">
+          {conditionSlug === 'clear' && (
+            <div className="sun-stage">
+              <span className="sun-core" />
+              <span className="sun-halo sun-halo-one" />
+              <span className="sun-halo sun-halo-two" />
+              <span className="sun-ray sun-ray-one" />
+              <span className="sun-ray sun-ray-two" />
+              <span className="sun-ray sun-ray-three" />
+            </div>
+          )}
+
+          {(conditionSlug === 'clouds' || conditionSlug === 'mist') && (
+            <div className="cloud-bank">
+              <span className="cloud-wisp cloud-wisp-one" />
+              <span className="cloud-wisp cloud-wisp-two" />
+              <span className="cloud-wisp cloud-wisp-three" />
+            </div>
+          )}
+
+          {isRainy && (
+            <div className="rain-field">
+              {rainDrops.map((drop, i) => (
+                <span
+                  key={`rain-${i}`}
+                  className="rain-streak"
+                  style={{
+                    left: drop.left,
+                    animationDelay: drop.delay,
+                    animationDuration: drop.duration,
+                    opacity: drop.opacity,
+                  }}
+                />
+              ))}
+            </div>
+          )}
+
+          {isSnowy && (
+            <div className="snow-field">
+              {snowFlakes.map((flake, i) => (
+                <span
+                  key={`snow-${i}`}
+                  className="snow-flake"
+                  style={{
+                    left: flake.left,
+                    width: flake.size,
+                    height: flake.size,
+                    animationDelay: flake.delay,
+                    animationDuration: flake.duration,
+                    opacity: flake.opacity,
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {hasWeather && hasScreenWeather && (
+        <div className={`screen-weather screen-${conditionSlug}`} aria-hidden="true">
+          {isRainy &&
+            screenDrops.map((drop, i) => (
+              <span
+                key={`screen-drop-${i}`}
+                className="screen-drop"
+                style={{
+                  left: drop.left,
+                  top: drop.top,
+                  width: drop.size,
+                  height: drop.size,
+                  animationDelay: drop.delay,
+                  animationDuration: drop.duration,
+                  opacity: drop.opacity,
+                }}
+              />
+            ))}
+
+          {isSnowy && (
+            <>
+              <span className="frost-edge frost-edge-left" />
+              <span className="frost-edge frost-edge-right" />
+              {snowSplats.map((splat, i) => (
+                <span
+                  key={`snow-splat-${i}`}
+                  className="snow-splat"
+                  style={{
+                    left: splat.left,
+                    top: splat.top,
+                    animationDelay: splat.delay,
+                  }}
+                />
+              ))}
+            </>
+          )}
+
+          {isStorm && <span key={stormFlash} className="lightning-flash" />}
+        </div>
+      )}
 
       <main className="shell">
         <header className="brand">
@@ -476,7 +742,10 @@ export default function App() {
                   <button
                     type="button"
                     className="fav-chip"
-                    onClick={() => fetchWeather({ lat: f.lat, lon: f.lon })}
+                    onClick={() => {
+                      primeAudio();
+                      fetchWeather({ lat: f.lat, lon: f.lon });
+                    }}
                   >
                     {f.name}
                     <span className="fav-chip-cc">{f.country}</span>
@@ -614,6 +883,19 @@ export default function App() {
                 <button type="button" className="toolbar-btn" onClick={refreshWeather}>
                   ⟳ Refresh
                 </button>
+                {isStorm && (
+                  <button
+                    type="button"
+                    className={`toolbar-btn sound${soundEnabled ? ' is-on' : ''}`}
+                    onClick={() => {
+                      primeAudio();
+                      setSoundEnabled((enabled) => !enabled);
+                    }}
+                    aria-pressed={soundEnabled}
+                  >
+                    {soundEnabled ? 'Thunder sound on' : 'Thunder sound off'}
+                  </button>
+                )}
                 <button
                   type="button"
                   className={`toolbar-btn heart${isFav ? ' is-on' : ''}`}
