@@ -10,6 +10,7 @@ const api = {
 
 const GEO_BASE = 'https://api.openweathermap.org/geo/1.0/direct';
 const FAV_KEY = 'mr-weather-favorites-v1';
+const TEMP_UNIT_KEY = 'mr-weather-temp-unit-v1';
 
 function formatPlace(s) {
   const parts = [s.name];
@@ -20,6 +21,15 @@ function formatPlace(s) {
 
 function favId(lat, lon) {
   return `${Number(lat).toFixed(4)},${Number(lon).toFixed(4)}`;
+}
+
+function formatTemp(tempC, unit) {
+  if (typeof tempC !== 'number' || Number.isNaN(tempC)) return null;
+  return unit === 'f' ? Math.round((tempC * 9) / 5 + 32) : Math.round(tempC);
+}
+
+function tempUnitLabel(unit) {
+  return unit === 'f' ? '°F' : '°C';
 }
 
 function seededUnit(index, seed) {
@@ -90,6 +100,13 @@ export default function App() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [thunderActive, setThunderActive] = useState(false);
   const [stormFlash, setStormFlash] = useState(0);
+  const [tempUnit, setTempUnit] = useState(() => {
+    try {
+      return localStorage.getItem(TEMP_UNIT_KEY) === 'f' ? 'f' : 'c';
+    } catch (_) {
+      return 'c';
+    }
+  });
 
   const wrapRef = useRef(null);
   const listRef = useRef(null);
@@ -120,6 +137,14 @@ export default function App() {
       /* ignore */
     }
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TEMP_UNIT_KEY, tempUnit);
+    } catch (_) {
+      /* ignore */
+    }
+  }, [tempUnit]);
 
   const primeAudio = useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -481,8 +506,15 @@ export default function App() {
 
   const feelsLike =
     hasWeather && weather.main && typeof weather.main.feels_like === 'number'
-      ? Math.round(weather.main.feels_like)
+      ? formatTemp(weather.main.feels_like, tempUnit)
       : null;
+
+  const currentTemp =
+    hasWeather && weather.main && typeof weather.main.temp === 'number'
+      ? formatTemp(weather.main.temp, tempUnit)
+      : null;
+
+  const activeTempUnitLabel = tempUnitLabel(tempUnit);
 
   const humidity =
     hasWeather && weather.main && typeof weather.main.humidity === 'number'
@@ -880,6 +912,24 @@ export default function App() {
           <>
             <article className="weather-card fade-in">
               <div className="weather-card-toolbar">
+                <div className="unit-toggle" role="group" aria-label="Temperature unit">
+                  <button
+                    type="button"
+                    className={`unit-btn${tempUnit === 'c' ? ' is-active' : ''}`}
+                    onClick={() => setTempUnit('c')}
+                    aria-pressed={tempUnit === 'c'}
+                  >
+                    °C
+                  </button>
+                  <button
+                    type="button"
+                    className={`unit-btn${tempUnit === 'f' ? ' is-active' : ''}`}
+                    onClick={() => setTempUnit('f')}
+                    aria-pressed={tempUnit === 'f'}
+                  >
+                    °F
+                  </button>
+                </div>
                 <button type="button" className="toolbar-btn" onClick={refreshWeather}>
                   ⟳ Refresh
                 </button>
@@ -934,8 +984,8 @@ export default function App() {
               <p className="mood-line">{moodLine(conditionMain, weather.main.temp)}</p>
 
               <div className="temp-row">
-                <span className="temp-value">{Math.round(weather.main.temp)}</span>
-                <span className="temp-unit">°C</span>
+                <span className="temp-value">{currentTemp}</span>
+                <span className="temp-unit temp-unit-live">{activeTempUnitLabel}</span>
               </div>
               <p className="condition">{conditionMain}</p>
               {conditionDesc && <p className="condition-desc">{conditionDesc}</p>}
@@ -967,7 +1017,10 @@ export default function App() {
                 {feelsLike !== null && (
                   <li className="stat">
                     <span className="stat-label">Feels like</span>
-                    <span className="stat-value">{feelsLike}°</span>
+                    <span className="stat-value">
+                      {feelsLike}
+                      {activeTempUnitLabel}
+                    </span>
                   </li>
                 )}
                 {humidity !== null && (
@@ -1036,7 +1089,10 @@ export default function App() {
                           {forecastTimeFmt.format(new Date(t))}
                         </time>
                         {ic && <img className="fc-icon" src={ic} alt="" width={48} height={48} />}
-                        <span className="fc-temp">{Math.round(slot.main.temp)}°</span>
+                        <span className="fc-temp fc-temp-live">
+                          {formatTemp(slot.main.temp, tempUnit)}
+                          {activeTempUnitLabel}
+                        </span>
                         <span className="fc-main">
                           {slot.weather && slot.weather[0] ? slot.weather[0].main : ''}
                         </span>

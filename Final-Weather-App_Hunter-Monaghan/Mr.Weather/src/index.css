@@ -895,6 +895,50 @@ body {
   margin-bottom: 12px;
 }
 
+.unit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.unit-btn {
+  min-width: 42px;
+  height: 30px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, transform 0.12s;
+}
+
+.unit-btn:hover {
+  color: var(--text);
+}
+
+.unit-btn:active {
+  transform: scale(0.96);
+}
+
+.unit-btn.is-active {
+  color: #0f172a;
+  background: linear-gradient(180deg, #f8fafc 0%, #bae6fd 100%);
+  box-shadow: 0 6px 14px rgba(2, 132, 199, 0.24);
+}
+
+.unit-btn:focus-visible {
+  outline: 2px solid rgba(186, 230, 253, 0.95);
+  outline-offset: 2px;
+}
+
 .toolbar-btn {
   padding: 8px 14px;
   font-family: inherit;
